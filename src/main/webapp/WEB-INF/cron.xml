@@ -1,0 +1,8 @@
+<cronentries>
+	<cron>
+		<url>/checkNewShows</url>
+		<description>Check for new shows each minute</description>
+		<schedule>every 1 minutes from 7:30 to 20:00</schedule>
+		<timezone>America/Los_Angeles</timezone>
+	</cron>
+</cronentries>
