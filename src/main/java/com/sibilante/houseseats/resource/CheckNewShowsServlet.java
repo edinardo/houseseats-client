@@ -2,23 +2,22 @@ package com.sibilante.houseseats.resource;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.UnsupportedEncodingException;
 import java.net.CookieHandler;
 import java.net.CookieManager;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLEncoder;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
@@ -47,22 +46,22 @@ public class CheckNewShowsServlet extends HttpServlet {
 
 	private final String loginURL = "https://lv.houseseats.com/member/index.bv";
 	private final String showsURL = "https://lv.houseseats.com/member/ajax/upcoming-shows.bv?sortField=name";
-	private HttpsURLConnection httpsURLConnection;
 	private static final Logger logger = Logger.getLogger(CheckNewShowsServlet.class.getName());
-	private List<String> cookies;
 	private static List<Show> currentShows = new ArrayList<>();
 	private IgnoreShowInterface ignoreShow = new IgnoreShowService();
 	private final String topic = "shows";
 	private final Properties properties = new Properties();
+	private Instant lastFindShows;
 
 	@Override
 	public void init() throws ServletException {
 		super.init();
+		// Handle the cookies for the org.jsoup.Connection or URLConnectons
 		CookieHandler.setDefault(new CookieManager());
 		try {
 			InputStream appPropertiesStream = getServletContext().getResourceAsStream("/WEB-INF/app.properties");
 			properties.load(appPropertiesStream);
-			currentShows = findShows(showsURL); 
+			currentShows = findShows();
 			InputStream serviceAccountKey = getServletContext().getResourceAsStream("/WEB-INF/serviceAccountKey.json");
 			FirebaseOptions firebaseOptions = new FirebaseOptions.Builder()
 					.setCredentials(GoogleCredentials.fromStream(serviceAccountKey))
@@ -75,12 +74,11 @@ public class CheckNewShowsServlet extends HttpServlet {
 
 	@Override
 	public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
-		CookieHandler.setDefault(new CookieManager());
 		response.setContentType("text/plain");
 		response.setCharacterEncoding("UTF-8");
 		List<Show> lastShows;
 		try {
-			lastShows = findShows(showsURL);
+			lastShows = findShows();
 			List<Show> newShows = new ArrayList<>(lastShows);
 			newShows.removeAll(currentShows);
 			newShows.removeAll(ignoreShow.findAll());
@@ -96,85 +94,36 @@ public class CheckNewShowsServlet extends HttpServlet {
 			logger.log(Level.SEVERE, exception.getMessage(), exception);
 		}
 	}
-
-	private ArrayList<Show> findShows(String url) throws UnsupportedEncodingException {
+	
+	/**
+	 * Retrieve the list of the currently available shows.
+	 * 
+	 * Since the session duration is managed on the server side and seems that end after 20 minutes of inactivity,
+	 * it will authentic just at the first call, or if the last call was executed more than 20 minutes ago.
+	 * 
+	 * @return The list of currently available shows.
+	 * @throws IOException
+	 */
+	private ArrayList<Show> findShows() throws IOException {
 		ArrayList<Show> showList = new ArrayList<>();
-		while (showList.isEmpty()) {
-			Document doc = Jsoup.parse(getPageContent(url));
-			Element showArea = doc.getElementById("grid-view-info");
-			Elements showElements = showArea.getElementsByClass("panel-heading");
-
-			for (Element showElement : showElements) {
-				showList.add(new Show(Long.parseLong(showElement.select("a").first().attr("href").substring(23)),
-									  showElement.select("a").first().text()));
-			}
+		if (lastFindShows == null || Duration.between(lastFindShows, Instant.now()).getSeconds() > 1200) {
+			Jsoup.connect(loginURL)
+				.data("submit", "login")
+				.data("email", properties.getProperty("houseseats.email"))
+				.data("password", properties.getProperty("houseseats.password"))
+				.post();
 		}
+		Document doc = Jsoup.connect(showsURL)
+				.get();
+		Element showArea = doc.getElementById("grid-view-info");
+		Elements showElements = showArea.getElementsByClass("panel-heading");
+		for (Element showElement : showElements) {
+			showList.add(new Show(Long.parseLong(showElement.select("a").first().attr("href").substring(23)),
+					showElement.select("a").first().text()));
+
+		}
+		lastFindShows = Instant.now();
 		return showList;
-	}
-
-	private String getPageContent(String url) {
-
-		StringBuilder response = null;
-
-
-		try {
-			login();
-
-			URL obj = new URL(url);
-			httpsURLConnection = (HttpsURLConnection) obj.openConnection();
-			httpsURLConnection.setReadTimeout(10000 /* milliseconds */);
-			httpsURLConnection.setConnectTimeout(15000 /* milliseconds */);
-
-			// act like a browser
-			httpsURLConnection.setRequestProperty("User-Agent", "Mozilla/5.0");
-			httpsURLConnection.setRequestProperty("Accept",
-					"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-			httpsURLConnection.setRequestProperty("Accept-Language", "en-US,en;q=0.5");
-			if (cookies != null) {
-				for (String cookie : this.cookies) {
-					httpsURLConnection.addRequestProperty("Cookie", cookie.split(";", 1)[0]);
-				}
-			}
-
-			BufferedReader in = new BufferedReader(new InputStreamReader(httpsURLConnection.getInputStream()));
-			String inputLine;
-			response = new StringBuilder();
-
-			while ((inputLine = in.readLine()) != null) {
-				response.append(inputLine);
-			}
-			in.close();
-		} catch (IOException exception) {
-			logger.log(Level.SEVERE, exception.getMessage(), exception);
-		}
-
-		return response != null ? response.toString() : null;
-	}
-
-	private int login() {
-		int response = -1;
-		try {
-			URL url = new URL(loginURL);
-			httpsURLConnection = (HttpsURLConnection) url.openConnection();
-			httpsURLConnection.setReadTimeout(5000);
-			httpsURLConnection.setConnectTimeout(10000);
-			httpsURLConnection.setRequestMethod("POST");
-			httpsURLConnection.setDoOutput(true);
-			httpsURLConnection.setDoInput(true);
-
-			DataOutputStream dataOutputStream = new DataOutputStream(httpsURLConnection.getOutputStream());
-			String postParams = "submit=login&email="
-					+ URLEncoder.encode(properties.getProperty("houseseats.email"), "UTF-8") + "&password="
-					+ URLEncoder.encode(properties.getProperty("houseseats.password"), "UTF-8");
-			dataOutputStream.writeBytes(postParams);
-			dataOutputStream.flush();
-			dataOutputStream.close();
-
-			response = httpsURLConnection.getResponseCode();
-		} catch (IOException exception) {
-			logger.log(Level.SEVERE, exception.getMessage(), exception);
-		}
-		return response;
 	}
 	
 	private void sendTelegram(Show show) throws IOException {
