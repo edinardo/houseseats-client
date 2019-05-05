@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
@@ -47,7 +48,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 	private final String loginURL = "https://lv.houseseats.com/member/index.bv";
 	private final String showsURL = "https://lv.houseseats.com/member/ajax/upcoming-shows.bv?sortField=name";
 	private static final Logger logger = Logger.getLogger(CheckNewShowsServlet.class.getName());
-	private static List<Show> currentShows = new ArrayList<>();
+	private static List<Show> oldShows = new ArrayList<>();
 	private IgnoreShowInterface ignoreShow = new IgnoreShowService();
 	private final String topic = "shows";
 	private final Properties properties = new Properties();
@@ -61,38 +62,48 @@ public class CheckNewShowsServlet extends HttpServlet {
 		try {
 			InputStream appPropertiesStream = getServletContext().getResourceAsStream("/WEB-INF/app.properties");
 			properties.load(appPropertiesStream);
-			currentShows = findShows();
+			oldShows = getHouseSeatsShows();
 			InputStream serviceAccountKey = getServletContext().getResourceAsStream("/WEB-INF/serviceAccountKey.json");
 			FirebaseOptions firebaseOptions = new FirebaseOptions.Builder()
 					.setCredentials(GoogleCredentials.fromStream(serviceAccountKey))
 					.build();
 			FirebaseApp.initializeApp(firebaseOptions);			
-		} catch (IOException exception) {
-			logger.log(Level.SEVERE, exception.getMessage(), exception);
+		} catch (IOException e) {
+			logger.log(Level.SEVERE, e.getMessage(), e);
 		}
 	}
 
 	@Override
 	public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
 		response.setContentType("text/plain");
-		response.setCharacterEncoding("UTF-8");
-		List<Show> lastShows;
-		try {
-			lastShows = findShows();
-			List<Show> newShows = new ArrayList<>(lastShows);
-			newShows.removeAll(currentShows);
-			newShows.removeAll(ignoreShow.findAll());
-			if (!newShows.isEmpty()) {
-				for (Show newShow : newShows) {
-					sendTelegram(newShow);
-					sendFirebaseCloudMessage(newShow);
-				}
+		response.setCharacterEncoding("UTF-8");	
+	
+		List<Show> currentShows = getHouseSeatsShows();
+		List<Show> newShows = currentShows.stream()
+				.filter(s -> !oldShows.contains(s))
+				.collect(Collectors.toList());
+		if (newShows.isEmpty()) {
+			try {
+				Thread.sleep(30000);
+				currentShows = getHouseSeatsShows();
+				newShows = currentShows.stream()
+						.filter(s -> !oldShows.contains(s))
+						.collect(Collectors.toList());
+			} catch (InterruptedException e) {
+				logger.log(Level.SEVERE, e.getMessage(), e);
 			}
-			currentShows = new ArrayList<>(lastShows);
-			response.getWriter().print(newShows);
-		} catch (Exception exception) {
-			logger.log(Level.SEVERE, exception.getMessage(), exception);
 		}
+		
+		newShows.removeAll(ignoreShow.findAll());
+		if (!newShows.isEmpty()) {
+			for (Show newShow : newShows) {
+				sendTelegram(newShow);
+				sendFirebaseCloudMessage(newShow);
+			}
+		}
+		
+		oldShows = new ArrayList<>(currentShows);
+		response.getWriter().print(newShows);
 	}
 	
 	/**
@@ -104,7 +115,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 	 * @return The list of currently available shows.
 	 * @throws IOException
 	 */
-	private ArrayList<Show> findShows() throws IOException {
+	private List<Show> getHouseSeatsShows() throws IOException {
 		ArrayList<Show> showList = new ArrayList<>();
 		if (lastFindShows == null || Duration.between(lastFindShows, Instant.now()).getSeconds() > 1200) {
 			Jsoup.connect(loginURL)
@@ -148,7 +159,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 		}
 	}
 	
-	private String sendFirebaseCloudMessage(Show show) throws FirebaseMessagingException {
+	private void sendFirebaseCloudMessage(Show show) {
 		Message message = Message.builder()
 				.setAndroidConfig(AndroidConfig.builder()
 						.setPriority(AndroidConfig.Priority.HIGH)
@@ -157,7 +168,11 @@ public class CheckNewShowsServlet extends HttpServlet {
 			    .putData("name", show.getName())
 			    .setTopic(topic)
 			    .build();
-		return FirebaseMessaging.getInstance().send(message);
+		try {
+			FirebaseMessaging.getInstance().send(message);
+		} catch (FirebaseMessagingException e) {
+			logger.log(Level.SEVERE, e.getMessage(), e);
+		}
 	}
 
 }
