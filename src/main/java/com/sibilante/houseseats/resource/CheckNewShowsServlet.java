@@ -47,7 +47,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 	private static final String LOGIN_URL = "https://lv.houseseats.com/member/index.bv";
 	private static final String SHOWS_URL = "https://lv.houseseats.com/member/ajax/upcoming-shows.bv?sortField=name";
 	private static final Logger logger = Logger.getLogger(CheckNewShowsServlet.class.getName());
-	//private List<Show> oldShows;
+	private static final String OLD_SHOWS_ATTRIBUTE = "oldShows";
 	private static IgnoreShowInterface ignoreShow = new IgnoreShowService();
 	private static final String TOPIC = "shows";
 	private final Properties properties = new Properties();
@@ -61,7 +61,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 		try {
 			InputStream appPropertiesStream = getServletContext().getResourceAsStream("/WEB-INF/app.properties");
 			properties.load(appPropertiesStream);
-			getServletContext().setAttribute("oldShows", getHouseSeatsShows());
+			getServletContext().setAttribute(OLD_SHOWS_ATTRIBUTE, getHouseSeatsShows());
 			InputStream serviceAccountKey = getServletContext().getResourceAsStream("/WEB-INF/serviceAccountKey.json");
 			FirebaseOptions firebaseOptions = new FirebaseOptions.Builder()
 					.setCredentials(GoogleCredentials.fromStream(serviceAccountKey))
@@ -75,7 +75,7 @@ public class CheckNewShowsServlet extends HttpServlet {
 	@Override
 	public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
 		@SuppressWarnings("unchecked")
-		final List<Show> oldShows = (List<Show>) getServletContext().getAttribute("oldShows");
+		final List<Show> oldShows = (List<Show>) getServletContext().getAttribute(OLD_SHOWS_ATTRIBUTE);
 		response.setContentType("text/plain");
 		response.setCharacterEncoding("UTF-8");	
 	
@@ -94,16 +94,16 @@ public class CheckNewShowsServlet extends HttpServlet {
 				logger.severe(e.getMessage());
 			}
 		}
-		
-		newShows.removeAll(ignoreShow.findAll());
+
 		if (!newShows.isEmpty()) {
+			newShows.removeAll(ignoreShow.findAll());
 			for (Show newShow : newShows) {
 				sendTelegram(newShow);
 				sendFirebaseCloudMessage(newShow);
 			}
 		}
 
-		getServletContext().setAttribute("oldShows", new ArrayList<>(currentShows));
+		getServletContext().setAttribute(OLD_SHOWS_ATTRIBUTE, new ArrayList<>(currentShows));
 		response.getWriter().print(newShows);
 	}
 	
