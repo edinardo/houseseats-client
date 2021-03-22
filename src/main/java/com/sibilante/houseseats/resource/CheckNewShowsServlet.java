@@ -15,7 +15,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -45,12 +44,12 @@ import com.sibilante.houseseats.service.IgnoreShowService;
 @WebServlet(name = "HelloAppEngine", urlPatterns = { "/checkNewShows" })
 public class CheckNewShowsServlet extends HttpServlet {
 
-	private final String loginURL = "https://lv.houseseats.com/member/index.bv";
-	private final String showsURL = "https://lv.houseseats.com/member/ajax/upcoming-shows.bv?sortField=name";
+	private static final String LOGIN_URL = "https://lv.houseseats.com/member/index.bv";
+	private static final String SHOWS_URL = "https://lv.houseseats.com/member/ajax/upcoming-shows.bv?sortField=name";
 	private static final Logger logger = Logger.getLogger(CheckNewShowsServlet.class.getName());
-	private static List<Show> oldShows = new ArrayList<>();
-	private IgnoreShowInterface ignoreShow = new IgnoreShowService();
-	private final String topic = "shows";
+	private static final String OLD_SHOWS_ATTRIBUTE = "oldShows";
+	private static IgnoreShowInterface ignoreShow = new IgnoreShowService();
+	private static final String TOPIC = "shows";
 	private final Properties properties = new Properties();
 	private Instant lastFindShows;
 
@@ -62,19 +61,21 @@ public class CheckNewShowsServlet extends HttpServlet {
 		try {
 			InputStream appPropertiesStream = getServletContext().getResourceAsStream("/WEB-INF/app.properties");
 			properties.load(appPropertiesStream);
-			oldShows = getHouseSeatsShows();
+			getServletContext().setAttribute(OLD_SHOWS_ATTRIBUTE, getHouseSeatsShows());
 			InputStream serviceAccountKey = getServletContext().getResourceAsStream("/WEB-INF/serviceAccountKey.json");
 			FirebaseOptions firebaseOptions = new FirebaseOptions.Builder()
 					.setCredentials(GoogleCredentials.fromStream(serviceAccountKey))
 					.build();
 			FirebaseApp.initializeApp(firebaseOptions);			
 		} catch (IOException e) {
-			logger.log(Level.SEVERE, e.getMessage(), e);
+			logger.severe(e.getMessage());
 		}
 	}
 
 	@Override
 	public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+		@SuppressWarnings("unchecked")
+		final List<Show> oldShows = (List<Show>) getServletContext().getAttribute(OLD_SHOWS_ATTRIBUTE);
 		response.setContentType("text/plain");
 		response.setCharacterEncoding("UTF-8");	
 	
@@ -90,19 +91,19 @@ public class CheckNewShowsServlet extends HttpServlet {
 						.filter(s -> !oldShows.contains(s))
 						.collect(Collectors.toList());
 			} catch (InterruptedException e) {
-				logger.log(Level.SEVERE, e.getMessage(), e);
+				logger.severe(e.getMessage());
 			}
 		}
-		
-		newShows.removeAll(ignoreShow.findAll());
+
 		if (!newShows.isEmpty()) {
+			newShows.removeAll(ignoreShow.findAll());
 			for (Show newShow : newShows) {
 				sendTelegram(newShow);
 				sendFirebaseCloudMessage(newShow);
 			}
 		}
-		
-		oldShows = new ArrayList<>(currentShows);
+
+		getServletContext().setAttribute(OLD_SHOWS_ATTRIBUTE, new ArrayList<>(currentShows));
 		response.getWriter().print(newShows);
 	}
 	
@@ -115,47 +116,56 @@ public class CheckNewShowsServlet extends HttpServlet {
 	 * @return The list of currently available shows.
 	 * @throws IOException
 	 */
-	private List<Show> getHouseSeatsShows() throws IOException {
+	private List<Show> getHouseSeatsShows() {
 		ArrayList<Show> showList = new ArrayList<>();
-		if (lastFindShows == null || Duration.between(lastFindShows, Instant.now()).getSeconds() > 1200) {
-			Jsoup.connect(loginURL)
-				.data("submit", "login")
-				.data("email", properties.getProperty("houseseats.email"))
-				.data("password", properties.getProperty("houseseats.password"))
-				.post();
-		}
-		Document doc = Jsoup.connect(showsURL)
-				.get();
-		Element showArea = doc.getElementById("grid-view-info");
-		Elements showElements = showArea.getElementsByClass("panel-heading");
-		for (Element showElement : showElements) {
-			showList.add(new Show(Long.parseLong(showElement.select("a").first().attr("href").substring(23)),
-					showElement.select("a").first().text()));
-
+		try {
+			if (lastFindShows == null || Duration.between(lastFindShows, Instant.now()).getSeconds() > 1200) {
+				Jsoup.connect(LOGIN_URL)
+					.data("submit", "login")
+					.data("email", properties.getProperty("houseseats.email"))
+					.data("password", properties.getProperty("houseseats.password"))
+					.post();
+			}
+			Document doc = Jsoup.connect(SHOWS_URL)
+					.get();
+			
+			Element showArea = doc.getElementById("grid-view-info");
+			Elements showElements = showArea.getElementsByClass("panel-heading");
+			for (Element showElement : showElements) {
+				showList.add(new Show(Long.parseLong(showElement.select("a").first().attr("href").substring(23)),
+						showElement.select("a").first().text()));
+	
+			}
+		} catch (IOException e) {
+			logger.severe(e.getMessage());
 		}
 		lastFindShows = Instant.now();
 		return showList;
 	}
 	
-	private void sendTelegram(Show show) throws IOException {
+	private void sendTelegram(Show show) {
 		String urlString = "https://api.telegram.org/bot%s/sendMessage?chat_id=%s&text=%s&parse_mode=%s";
-		String text = URLEncoder.encode(
-				"[" + show.getName() + "](https://lv.houseseats.com/member/tickets/view/?showid=" + show.getId() + ")",
-				"UTF-8");
-		String parse_mode = "markdown";
-		urlString = String.format(urlString,
-				properties.getProperty("telegram.api.token"),
-				properties.getProperty("telegram.chat.id"), text, parse_mode);
-
-		URL url = new URL(urlString);
-		URLConnection conn = url.openConnection();
-
-		StringBuilder sb = new StringBuilder();
-		InputStream is = new BufferedInputStream(conn.getInputStream());
-		BufferedReader br = new BufferedReader(new InputStreamReader(is));
-		String inputLine = "";
-		while ((inputLine = br.readLine()) != null) {
-			sb.append(inputLine);
+		try {
+			String text = URLEncoder.encode(
+					"[" + show.getName() + "](https://lv.houseseats.com/member/tickets/view/?showid=" + show.getId() + ")",
+					"UTF-8");
+			String parseMode = "markdown";
+			urlString = String.format(urlString,
+					properties.getProperty("telegram.api.token"),
+					properties.getProperty("telegram.chat.id"), text, parseMode);
+	
+			URL url = new URL(urlString);
+			URLConnection conn = url.openConnection();
+	
+			StringBuilder sb = new StringBuilder();
+			InputStream is = new BufferedInputStream(conn.getInputStream());
+			BufferedReader br = new BufferedReader(new InputStreamReader(is));
+			String inputLine = "";
+			while ((inputLine = br.readLine()) != null) {
+				sb.append(inputLine);
+			}
+		} catch (IOException e) {
+			logger.severe(e.getMessage());
 		}
 	}
 	
@@ -166,12 +176,12 @@ public class CheckNewShowsServlet extends HttpServlet {
 						.build())
 				.putData("id", Long.toString(show.getId()))
 			    .putData("name", show.getName())
-			    .setTopic(topic)
+			    .setTopic(TOPIC)
 			    .build();
 		try {
 			FirebaseMessaging.getInstance().send(message);
 		} catch (FirebaseMessagingException e) {
-			logger.log(Level.SEVERE, e.getMessage(), e);
+			logger.severe(e.getMessage());
 		}
 	}
 
