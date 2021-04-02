@@ -1,0 +1,6 @@
+/.settings/
+/.classpath
+/.project
+/target/
+serviceAccountKey.json
+app.properties
