@@ -1,20 +1,21 @@
 package com.sibilante.houseseats;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.io.IOException;
 
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import com.sibilante.houseseats.resource.CheckNewShowsServlet;
 
-public class HelloAppEngineTest {
+class HelloAppEngineTest {
 
-  @Test
-  public void test() throws IOException {
-    MockHttpServletResponse response = new MockHttpServletResponse();
-    new CheckNewShowsServlet().doGet(null, response);
-    Assert.assertEquals("text/plain", response.getContentType());
-    Assert.assertEquals("UTF-8", response.getCharacterEncoding());
-    Assert.assertEquals("Hello App Engine!\r\n", response.getWriterContent().toString());
-  }
+	@Test
+	void test() throws IOException {
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		new CheckNewShowsServlet().doGet(null, response);
+		assertEquals("text/plain", response.getContentType());
+		assertEquals("UTF-8", response.getCharacterEncoding());
+		assertEquals("Hello App Engine!\r\n", response.getWriterContent().toString());
+	}
 }
